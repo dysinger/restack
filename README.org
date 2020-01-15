@@ -45,7 +45,7 @@
     attractive. Firstly, your OS isn't "the droids you are looking for" when it
     comes to hackers. Secondly, there's no shell or extra services running in
     your OS. Even if a hacker could probe your application's services, they will
-    likely not be able to gain elevated general privledges (E.G., root) on your
+    likely not be able to gain elevated general privileges (E.G., root) on your
     OS.
 
     For years, even during the peak of Bitcoin's price in 2017, there was a
