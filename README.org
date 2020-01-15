@@ -1,0 +1,105 @@
+#+TITLE: Restack: Full-Stack ReasonML
+#+AUTHOR: Tim Dysinger
+#+EMAIL: tim@dysinger.net
+
+* Intro
+
+  This is a tutorial series on using the [[https://reasonml.org/][ReasonML]] language to build [[https://mirage.io/][MirageOS]]
+  unikernels and user-facing applications with tools like [[https://github.com/reasonml/reason-react][Reason-React]]. Using
+  the same language for the entire stack is appealing. You'll likely be able to
+  stay in one editor, become very familiar with the syntax, and share common
+  code between the layers of your application. Let's talk about the different
+  components of such a stack.
+
+*** Unikernels (The Server)
+
+    If you aren't familiar with the concept of unikernels then there's a decent
+    Wikipedia [[https://en.wikipedia.org/wiki/Unikernel][page]] on the subject to read. You are encouraged to read about them
+    or watch some [[https://www.youtube.com/results?search_query=unikernel][videos]] to learn more.
+
+    Unikernels are minimalist opperating systems that consist only of your
+    application and the libraries needed at runtime. One feature often needed
+    for an application is the concept of files on disk. In a general-purpose OS,
+    the filesystem and shell are always there underneath your application. If
+    your application is 100% network-based and you don't need a file-system,
+    then in a unikernel you wouldn't include the library for accessing
+    files. This eliminates dead code that is [[https://www.cvedetails.com/product/47/Linux-Linux-Kernel.html?vendor_id=33][often]] [[https://www.cvedetails.com/product/21050/GNU-Bash.html?vendor_id=72][vulnerable]] and would
+    otherwise be there waiting for hackers.
+
+    MirageOS is an OCaml unikernel development kit that targets many different
+    platforms. Your code can be developed on a normal general-purpose desktop
+    opperating system. Applications built with MirageOS are very flexible and
+    can be deployed on the cloud using KVM, Xen, or even static POSIX
+    binaries. In the case of POSIX deployments, MirageOS stops being a
+    unikernel. But this is a great feature in that we can test the application
+    on our desktop and deploy it in disguise on Kubernetes.
+
+    MirageOS consists of a command line utility and a set of libraries that
+    enables you to build a stand-alone OS. Once built, your application IS the
+    whole opperating system. The `mirage` command line utility allows you to
+    configure your target deployment environment on the fly. You can decide
+    where you would like to run your OS after you've written the code and tested
+    it on your desktop.
+
+    There's very little attack surface on a unikernel. This is
+    attractive. Firstly, your OS isn't "the droids you are looking for" when it
+    comes to hackers. Secondly, there's no shell or extra services running in
+    your OS. Even if a hacker could probe your application's services, they will
+    likely not be able to gain elevated general privledges (E.G., root) on your
+    OS.
+
+    For years, even during the peak of Bitcoin's price in 2017, there was a
+    MirageOS Unikernel [[https://mirage.io/blog/bitcoin-pinata-results][pinata]] running with 10 bitcoin inside. Even with nearly
+    $200,000.00 USD hanging out there on the internet and a public challenge to
+    steal them, nobody was able to do so. I think this is a great testament to
+    the security aspects of unikernels. Nothing is foolproof but this is
+    definitely a step in the right direction.
+
+    While it's not necessary to use a unikernel for services, it is interesting
+    technology. You could also just write a native webserver for Linux or write
+    ReasonML bindings to popular Node webserver frameworks. We might show some
+    of those also.
+
+*** User Interfaces
+
+    There's less explaining needed here. Most of you are familiar with React or
+    other web frameworks.  We will combine a ReasonML webserver with a
+    Reason-React web interface. The webserver will serve the application and
+    then respond to the user's needs via GraphQL or REST. We might also possibly
+    show a desktop or a smartphone application written in ReasonML. We'll
+    see. This is a work in progress.
+
+* Setup
+
+  All of the mini-tutorials shown will use Docker. This may not be how we
+  develop things on a day to day basis. But, for the purposes of sharing
+  information, Docker is a great choice for portabliity. It'll work on most any
+  OS regardless of state. So long as you have Docker, you are good to go. (If
+  you happen to be using a Debian-based OS, then you can just copy the Docker
+  steps in your own desktop OS.)
+
+* Advertising
+
+  This work is sponsored by me as an effort to hustle work. I have worked
+  contract remote for the last 12 years but I'm open to employement or
+  partnership in a startup effort. I am always looking for an opportunity to use
+  Haskell, OCaml/ReasonML, or Rust full-time. I can help your team temporarily
+  or permanently. No opportunity is too short or long. Don't be shy.
+
+  I have 20+ years of software development under my belt including 10 years of
+  functional programming and multiple years of both leadership and
+  in-the-trenches SRE work.
+
+  If you like privacy then use keybase and/or send me a note using my [[https://github.com/FiloSottile/age][Age]]|[[https://github.com/str4d/rage][Rage]]
+  public key age19k29c8pgqf9e82dum0xk2y0aw3ql5gc8w47upuz57mqm8r66839s6ys4ul
+
+  I use the same 'dysinger' user id everywhere I can on the internet. Contact me
+  via keybase, wire, matrix, github, twitter, discord, or even old-fashioned
+  [[mailto:tim@dysinger.net?subject=Work][email]].
+
+* Demos/Tutorials
+
+  These are listed in order, progressively getting more complicated as we
+  go. Follow the links or head into the subdirectories for each one.
+
+*** [[file:000-hello-world/README.org][A ReasonML Unikernel "Hello, World"]]

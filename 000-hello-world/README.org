@@ -1,0 +1,291 @@
+#+TITLE: Hello World
+#+AUTHOR: Tim Dysinger
+#+EMAIL: tim@dysinger.net
+
+* A "Hello, World!" ReasonML Unikernel
+
+*** MirageOS Configuration
+
+    [[file:config.ml][config.ml]] is a snip of OCaml code to tell Mirage how to configure the
+    unikernel. You don't have to be an OCaml expert to use ReasonML but you will
+    eventually not care about the differences in syntax. All of the
+    documentation for libraries are in OCaml and all of the helpful hints on
+    Stack-Overflow are in OCaml. You will be bilingual before too long.
+
+    #+CAPTION: in ./config.ml
+    #+BEGIN_SRC ocaml :tangle ./config.ml
+      open Mirage
+
+      let main =
+        foreign
+          ~packages:[ package "reason";
+                      package "duration"; ]
+          "Unikernel.Hello" (time @-> job)
+
+      let () =
+        register "hello" [main $ default_time]
+    #+END_SRC
+
+    Here config.ml is opening the Mirage module and using some functions from it to
+    define the unkernel. It has a main which describes the [[https://opam.ocaml.org][Opam]] (OCaml library)
+    packages used by the unikernel. It has an entrypoint '()' that registers the
+    code as a unikernel with Mirage.
+
+*** ReasonML Unikernel Code
+
+    The [[file:unikernel.re][unikernel.re]] file has the entrypoint of your unikernel in ReasonML. This
+    is the meat of your unikernel. This file describes one module and it's sole
+    purpose is to print hello 4 times (one per second) to the console and then
+    exit. (This was converted from the MirageOS "skeleton" [[https://github.com/mirage/mirage-skeleton/tutorial/hello][tutorial]].) You can
+    see that it's really simple. It uses Light Weight Threads (LWT) which is a
+    common library in OCaml. If you were to deploy this on the cloud you'd see
+    some 'hello' printing in the console and then your instance would hang
+    up. On the command line on your general purpose OS, the POSIX application
+    will simply exit and you'll be back at the prompt.
+
+    #+CAPTION: in ./unikernel.re
+    #+BEGIN_SRC reason :tangle ./unikernel.re
+      open Lwt.Infix;
+
+      module Hello = (Time: Mirage_time.S) => {
+        let start = _time => {
+          let rec loop =
+            fun
+            | 0 => Lwt.return_unit
+            | n => {
+                Logs.info(f => f("hello"));
+                Time.sleep_ns(Duration.of_sec(1)) >>= (() => loop(n - 1));
+              };
+
+          loop(4);
+        };
+      };
+    #+END_SRC
+
+*** OCamlbuild Configuration
+
+    [[file:myocamlbuild.ml][myocamlbuild.ml]] tells the ocamlbuild (which is used by Mirage to compile
+    code) that we need to convert our ReasonML to OCaml while compiling. You
+    don't need to worry about this file so much. It's copy-pasta taken from the
+    internet a few years ago. I can't remember who gave it to me but it was
+    shared openly. If you have this file in place, mirage will compile all your
+    ReasonML code as if it were already OCaml.
+
+    #+CAPTION: in ./myocamlbuild.ml
+    #+BEGIN_SRC ocaml :tangle ./myocamlbuild.ml
+      open Ocamlbuild_pack
+      open Ocamlbuild_plugin
+
+      let ext_obj = !Options.ext_obj;;
+      let x_o = "%"-.-ext_obj;;
+
+      let refmt = "refmt --print binary"
+      let add_printers_tag = "reason.add_printers"
+
+      let ocamldep_command' tags =
+        let tags' = tags++"ocaml"++"ocamldep" in
+        let specs =
+          [ !Options.ocamldep;
+            T tags';
+            Ocaml_utils.ocaml_ppflags (tags++"pp:dep");
+            A "-modules" ] in
+        S specs
+
+      let impl_intf ~impl ?(intf_suffix=false) arg =
+        let inft_suffix_specs =
+          if intf_suffix
+          then [ A "-intf-suffix"; P ".rei" ]
+          else [] in
+        inft_suffix_specs
+        @
+        [ A (if impl then "-impl" else "-intf");
+          P arg ]
+
+      let compile_c ~impl ~native tags arg out =
+        let tags =
+          tags ++
+          "ocaml" ++
+          (if native then "native" else "byte") ++
+          "compile" in
+        let specs =
+          [ if native then !Options.ocamlopt else !Options.ocamlc;
+            A "-c";
+            T tags;
+            Ocaml_utils.ocaml_ppflags tags;
+            Ocaml_utils.ocaml_include_flags arg;
+            A "-pp"; P refmt;
+            A "-o"; Px out ]
+          @ impl_intf ~impl ~intf_suffix:true arg in
+        Cmd (S specs)
+
+      let union_tags re cm tag =
+        Tags.union (tags_of_pathname re) (tags_of_pathname cm)++"implem"+++tag
+
+      let byte_compile_re_implem ?tag re cmo env build =
+        let re = env re and cmo = env cmo in
+        Ocaml_compiler.prepare_compile build re;
+        compile_c ~impl:true ~native:false (union_tags re cmo tag) re cmo
+
+      let native_compile_re_implem ?tag ?(cmx_ext="cmx") re env build =
+        let re = env re in
+        let cmi = Pathname.update_extensions "cmi" re in
+        let cmx = Pathname.update_extensions cmx_ext re in
+        Ocaml_compiler.prepare_link cmx cmi [cmx_ext; "cmi"] build;
+        compile_c ~impl:true ~native:true (union_tags re cmx tag) re cmx
+
+      let compile_ocaml_interf rei cmi env build =
+        let rei = env rei and cmi = env cmi in
+        Ocaml_compiler.prepare_compile build rei;
+        let tags = tags_of_pathname rei++"interf" in
+        let native = Tags.mem "native" tags in
+        compile_c ~impl:false ~native tags rei cmi
+
+      let ocamldep_command ~impl arg out env _build =
+        let out = List.map env out in
+        let out = List.map (fun n -> Px n) out in
+        let out =
+          match List.rev out with
+          | ([] | [_]) as out -> out
+          | last :: rev_prefix -> [Sh "|"; P "tee"] @ List.rev_append rev_prefix [Sh ">"; last] in
+        let arg = env arg in
+        let tags = tags_of_pathname arg in
+        let specs =
+          [ ocamldep_command' tags;
+            A "-pp"; P refmt ]
+          @ impl_intf ~impl arg
+          @ out in
+        Cmd (S specs)
+
+      ;;
+
+      rule "rei -> cmi"
+        ~prod:"%.cmi"
+        ~deps:["%.rei"; "%.rei.depends"]
+        (compile_ocaml_interf "%.rei" "%.cmi")
+      ;;
+      rule "re dependecies"
+        ~prods:["%.re.depends"; "%.ml.depends" (* .ml.depends is also needed since
+          the function "prepare_link" requires .ml.depends *)]
+        ~deps:(["%.re"])
+        (ocamldep_command ~impl:true "%.re" ["%.re.depends"; "%.ml.depends"])
+      ;;
+      rule "rei dependencies"
+        ~prods:["%.rei.depends"; "%.mli.depends"]
+        ~dep:"%.rei"
+        (ocamldep_command ~impl:false "%.rei" ["%.rei.depends"; "%.mli.depends"])
+      ;;
+      rule "re -> d.cmo & cmi"
+        ~prods:["%.d.cmo"]
+        ~deps:["%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem ~tag:"debug" "%.re" "%.d.cmo")
+      ;;
+      rule "re & cmi -> cmo"
+        ~prod:"%.cmo"
+        ~deps:["%.rei"(* This one is inserted to force this rule to be skipped when
+                         a .ml is provided without a .mli *); "%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem "%.re" "%.cmo")
+      ;;
+      rule "re -> cmo & cmi"
+        ~prods:["%.cmo"; "%.cmi"]
+        ~deps:(["%.re"; "%.re.depends"])
+        (byte_compile_re_implem "%.re" "%.cmo")
+      ;;
+      rule "re & cmi -> d.cmo"
+        ~prod:"%.d.cmo"
+        ~deps:["%.rei"(* This one is inserted to force this rule to be skipped when
+              a .re is provided without a .rei *); "%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem ~tag:"debug" "%.re" "%.d.cmo")
+      ;;
+      rule "re & rei -> cmx & o"
+        ~prods:["%.cmx"; x_o]
+        ~deps:["%.re"; "%.ml.depends"; "%.cmi"]
+        (native_compile_re_implem "%.re")
+      ;;
+    #+END_SRC
+
+*** Dockerfile
+
+    Now we'll define the [[file:Dockerfile][Dockerfile]] which will build (and optionally house) our
+    Unikernel. We'll compile it as a POSIX application for first-day simplicity.
+    We'll start with Debian 10 as our general purpose OS.
+
+    #+CAPTION: in ./Dockerfile
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      FROM debian:10 as build
+    #+END_SRC
+
+    Next we'll update Debian's packages and upgrade any old crusty stuff from
+    the Docker image. We'll also add some nice apt transport features, curl,
+    gnupg and wget.
+
+    #+CAPTION: in ./Dockerfile
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      RUN apt-get update
+      RUN apt-get -y upgrade
+      RUN apt-get -y dist-upgrade
+      RUN apt-get -y install apt-transport-https curl gnupg wget
+      RUN update-ca-certificates
+    #+END_SRC
+
+    Now we'll install Opam 2. This is the OCaml package manager. If you are
+    familiar with Rust it's like Cargo, or Stack for Haskell, or NPM for
+    Node. We'll use the 4.08.1 OCaml version but we can change it later using
+    the build argument. (The sed bits just convert a human prompt `readline`
+    into an explicit path.)
+
+    #+CAPTION: in ./Dockerfile
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      ARG OCAML=4.08.1
+      ENV OPAMYES=1
+      RUN apt-get -y install \
+          bzip2 g++ git make m4 pkg-config rsync unzip xz-utils mercurial darcs
+      RUN curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh \
+        | sed 's/read BINDIR/BINDIR=\/usr\/local\/bin/g' | bash
+      RUN opam init --compiler=${OCAML} --auto-setup --disable-sandboxing
+    #+END_SRC
+
+    Next we'll install the mirage command line utility, send our host's tutorial
+    src directory up into the Docker image, configure mirage for POSIX, and
+    compile the unikernel. We have to eval each line to bring opam's environment
+    into context before executing opam or mirage. Docker doesn't maintain
+    environments from the previous command line like a shell so you have to run
+    it every line.
+
+    #+CAPTION: in ./Dockerfile
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      RUN eval $(opam env) && opam install mirage mirage-unix opam-depext
+      ADD ./ /src
+      WORKDIR /src
+      RUN eval $(opam env) && mirage configure -t unix
+      RUN eval $(opam env) && make depend
+      RUN eval $(opam env) && make
+    #+END_SRC
+
+    Now that we've got a POSIX binary to play with, we can relayer it onto a
+    smaller image (without all the developer gear.)
+
+    #+CAPTION: in ./Dockerfile
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      FROM debian:10 as deploy
+      COPY --from=build /src/_build/main.native /bin/hello
+      ENTRYPOINT /bin/hello
+    #+END_SRC
+
+*** Build the Docker unikernel image
+
+    #+CAPTION: in ./build.sh
+    #+BEGIN_SRC sh :tangle ./build.sh :shebang "#!/usr/bin/env bash"
+      docker build --tag restack/000-hello-world .
+    #+END_SRC
+
+    You just built your first ReasonML unikernel! Woot
+
+*** Run your "unikernel" in Docker
+
+    #+CAPTION: in ./run.sh
+    #+BEGIN_SRC sh :tangle ./run.sh :shebang "#!/usr/bin/env bash"
+      docker run --interactive --tty --rm restack/000-hello-world
+    #+END_SRC
+
+    Congrats! You just ran your first ReasonML unikernel! Next we will start
+    making real services that stay running and do things.
