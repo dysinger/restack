@@ -17,7 +17,7 @@
     Wikipedia [[https://en.wikipedia.org/wiki/Unikernel][page]] on the subject to read. You are encouraged to read about them
     or watch some [[https://www.youtube.com/results?search_query=unikernel][videos]] to learn more.
 
-    Unikernels are minimalist opperating systems that consist only of your
+    Unikernels are minimalist operating systems that consist only of your
     application and the libraries needed at runtime. One feature often needed
     for an application is the concept of files on disk. In a general-purpose OS,
     the filesystem and shell are always there underneath your application. If
@@ -28,7 +28,7 @@
 
     MirageOS is an OCaml unikernel development kit that targets many different
     platforms. Your code can be developed on a normal general-purpose desktop
-    opperating system. Applications built with MirageOS are very flexible and
+    operating system. Applications built with MirageOS are very flexible and
     can be deployed on the cloud using KVM, Xen, or even static POSIX
     binaries. In the case of POSIX deployments, MirageOS stops being a
     unikernel. But this is a great feature in that we can test the application
@@ -36,7 +36,7 @@
 
     MirageOS consists of a command line utility and a set of libraries that
     enables you to build a stand-alone OS. Once built, your application IS the
-    whole opperating system. The `mirage` command line utility allows you to
+    whole operating system. The `mirage` command line utility allows you to
     configure your target deployment environment on the fly. You can decide
     where you would like to run your OS after you've written the code and tested
     it on your desktop.
