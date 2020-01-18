@@ -1,0 +1,506 @@
+#+TITLE: Firecracker Webserver
+#+AUTHOR: Tim Dysinger
+#+EMAIL: tim@dysinger.net
+
+* A ReasonML Webserver (running on AWS Firecracker if you like)
+
+  In this small tutorial we will create a persistent MirageOS webserver. It will
+  do one very simple thing and that is to respond to HTTP requests with the
+  clock time as JSON. We're keeping the functionality simple so we can focus on
+  the configuration and deployment of MirageOS still.
+
+  More explanation went into most of these files in [[file:~/src/restack/000-hello-world/README.org][Hello, World]]. Go check that
+  tutorial out for reference if needed. We'll be reusing some of those files in
+  this tutorial without changes so we'll skip the lengthy explanation in some
+  spots.
+
+*** MirageOS
+
+    In this tutorial the MirageOS [[file:config.ml][config.ml]] file will setup a [[https://opam.ocaml.org/packages/cohttp/][cohttp]] server to
+    serve files and POSIX [[https://github.com/mirage/mirage-clock/blob/master/src/mirage_clock.ml][clock]] to track the date/time. After configuring the
+    HTTP server, without TLS and with a IPv4 TCP/IP stack, we register the
+    unikernel server with the Mirage framework. You can see that we can add
+    configurable runtime arguments in this case the HTTP port (with a default of
+    port 80.) This is optional but it demonstrates that we can add key/value
+    configuration to pass to the unikernel at runtime.
+
+    #+BEGIN_SRC ocaml :tangle config.ml
+      open Mirage
+
+      let server =
+        cohttp_server @@ conduit_direct ~tls:false (socket_stackv4 [Ipaddr.V4.any])
+
+      let main =
+        let packages = [ package "reason" ] in
+        let port =
+          let doc = Key.Arg.info ~doc:"Listening HTTP port." ["port"] in
+          Key.(create "port" Arg.(opt int 80 doc)) in
+        let keys = List.map Key.abstract [ port ] in
+        foreign
+          ~packages ~keys
+          "Unikernel.HTTP" (pclock @-> http @-> job)
+
+      let () =
+        register "webserver" [main $ default_posix_clock $ server]
+    #+END_SRC
+
+*** ReasonML
+
+    The [[file:unikernel.re][unikernel.re]] ReasonML webserver will serve up the current POSIX clock
+    time as JSON. We are putting the bare-minimum into our webserver in this
+    example. It is just enough to demonstrate serving dynamic data. We aren't
+    even going to complicate things by demonstrating different methods of
+    marshalling JSON to/from records yet. We'll just use string formatting. We
+    aren't inspecting the URI or HTTP headers that were provided. We're just
+    going to blindly give a JSON response every time with the current time.
+
+    #+BEGIN_SRC reason :tangle unikernel.re
+      let src = Logs.Src.create("http", ~doc="HTTP server");
+      module Log = (val (Logs.src_log(src): (module Logs.LOG)));
+
+      module Dispatch = (Clock: Mirage_clock.PCLOCK, Server: Cohttp_lwt.S.Server) => {
+        let serve = clock => {
+          let callback = ((_, cid), _request, _body) => {
+            let time = Clock.now_d_ps(clock) |> Ptime.v;
+            Log.info(f => f("responding to %s", Cohttp.Connection.to_string(cid)));
+            let headers = Cohttp.Header.init_with("content-type", "application/json")
+            and body = Format.asprintf("{ \"time\": \"%a\" }", Ptime.pp_human(), time);
+            Server.respond_string(~status=`OK, ~headers, ~body, ());
+          };
+          Server.make(~callback, ());
+        };
+      };
+
+      module HTTP = (Clock: Mirage_clock.PCLOCK, Server: Cohttp_lwt.S.Server) => {
+        let start = (clock, http) => {
+          let rec port = Key_gen.port()
+          and tcp = `TCP(port);
+          Log.info(f => f("listening on %d/TCP", port));
+          module D = Dispatch(Clock, Server);
+          http(tcp) @@ D.serve(clock);
+        };
+      };
+    #+END_SRC
+
+*** OCamlbuild
+
+    [[file:myocamlbuild.ml][myocamlbuild.ml]] has not changed the previous tutorial [[file:~/src/restack/000-hello-world/README.org][Hello, World]]. It is
+    still needed to compile our ReasonML.
+
+    #+BEGIN_SRC ocaml :tangle myocamlbuild.ml
+      open Ocamlbuild_pack
+      open Ocamlbuild_plugin
+
+      let ext_obj = !Options.ext_obj;;
+      let x_o = "%"-.-ext_obj;;
+
+      let refmt = "refmt --print binary"
+      let add_printers_tag = "reason.add_printers"
+
+      let ocamldep_command' tags =
+        let tags' = tags++"ocaml"++"ocamldep" in
+        let specs =
+          [ !Options.ocamldep;
+            T tags';
+            Ocaml_utils.ocaml_ppflags (tags++"pp:dep");
+            A "-modules" ] in
+        S specs
+
+      let impl_intf ~impl ?(intf_suffix=false) arg =
+        let inft_suffix_specs =
+          if intf_suffix
+          then [ A "-intf-suffix"; P ".rei" ]
+          else [] in
+        inft_suffix_specs
+        @
+        [ A (if impl then "-impl" else "-intf");
+          P arg ]
+
+      let compile_c ~impl ~native tags arg out =
+        let tags =
+          tags ++
+          "ocaml" ++
+          (if native then "native" else "byte") ++
+          "compile" in
+        let specs =
+          [ if native then !Options.ocamlopt else !Options.ocamlc;
+            A "-c";
+            T tags;
+            Ocaml_utils.ocaml_ppflags tags;
+            Ocaml_utils.ocaml_include_flags arg;
+            A "-pp"; P refmt;
+            A "-o"; Px out ]
+          @ impl_intf ~impl ~intf_suffix:true arg in
+        Cmd (S specs)
+
+      let union_tags re cm tag =
+        Tags.union (tags_of_pathname re) (tags_of_pathname cm)++"implem"+++tag
+
+      let byte_compile_re_implem ?tag re cmo env build =
+        let re = env re and cmo = env cmo in
+        Ocaml_compiler.prepare_compile build re;
+        compile_c ~impl:true ~native:false (union_tags re cmo tag) re cmo
+
+      let native_compile_re_implem ?tag ?(cmx_ext="cmx") re env build =
+        let re = env re in
+        let cmi = Pathname.update_extensions "cmi" re in
+        let cmx = Pathname.update_extensions cmx_ext re in
+        Ocaml_compiler.prepare_link cmx cmi [cmx_ext; "cmi"] build;
+        compile_c ~impl:true ~native:true (union_tags re cmx tag) re cmx
+
+      let compile_ocaml_interf rei cmi env build =
+        let rei = env rei and cmi = env cmi in
+        Ocaml_compiler.prepare_compile build rei;
+        let tags = tags_of_pathname rei++"interf" in
+        let native = Tags.mem "native" tags in
+        compile_c ~impl:false ~native tags rei cmi
+
+      let ocamldep_command ~impl arg out env _build =
+        let out = List.map env out in
+        let out = List.map (fun n -> Px n) out in
+        let out =
+          match List.rev out with
+          | ([] | [_]) as out -> out
+          | last :: rev_prefix -> [Sh "|"; P "tee"] @ List.rev_append rev_prefix [Sh ">"; last] in
+        let arg = env arg in
+        let tags = tags_of_pathname arg in
+        let specs =
+          [ ocamldep_command' tags;
+            A "-pp"; P refmt ]
+          @ impl_intf ~impl arg
+          @ out in
+        Cmd (S specs)
+
+      ;;
+
+      rule "rei -> cmi"
+        ~prod:"%.cmi"
+        ~deps:["%.rei"; "%.rei.depends"]
+        (compile_ocaml_interf "%.rei" "%.cmi")
+      ;;
+      rule "re dependecies"
+        ~prods:["%.re.depends"; "%.ml.depends" (* .ml.depends is also needed since
+          the function "prepare_link" requires .ml.depends *)]
+        ~deps:(["%.re"])
+        (ocamldep_command ~impl:true "%.re" ["%.re.depends"; "%.ml.depends"])
+      ;;
+      rule "rei dependencies"
+        ~prods:["%.rei.depends"; "%.mli.depends"]
+        ~dep:"%.rei"
+        (ocamldep_command ~impl:false "%.rei" ["%.rei.depends"; "%.mli.depends"])
+      ;;
+      rule "re -> d.cmo & cmi"
+        ~prods:["%.d.cmo"]
+        ~deps:["%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem ~tag:"debug" "%.re" "%.d.cmo")
+      ;;
+      rule "re & cmi -> cmo"
+        ~prod:"%.cmo"
+        ~deps:["%.rei"(* This one is inserted to force this rule to be skipped when
+                         a .ml is provided without a .mli *); "%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem "%.re" "%.cmo")
+      ;;
+      rule "re -> cmo & cmi"
+        ~prods:["%.cmo"; "%.cmi"]
+        ~deps:(["%.re"; "%.re.depends"])
+        (byte_compile_re_implem "%.re" "%.cmo")
+      ;;
+      rule "re & cmi -> d.cmo"
+        ~prod:"%.d.cmo"
+        ~deps:["%.rei"(* This one is inserted to force this rule to be skipped when
+              a .re is provided without a .rei *); "%.re"; "%.re.depends"; "%.cmi"]
+        (byte_compile_re_implem ~tag:"debug" "%.re" "%.d.cmo")
+      ;;
+      rule "re & rei -> cmx & o"
+        ~prods:["%.cmx"; x_o]
+        ~deps:["%.re"; "%.ml.depends"; "%.cmi"]
+        (native_compile_re_implem "%.re")
+      ;;
+    #+END_SRC
+
+*** Docker
+
+    Now we'll define the [[file:Dockerfile][Dockerfile]] which will build and house our MirageOS
+    webserver and Firecracker image-building tools. We'll start with Alpine
+    linux as a base container.
+
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      FROM alpine:3.11 as build
+    #+END_SRC
+
+    Next we'll install OCaml, Opam, and a few tools needed by Opam packages.
+    Alpine has pretty up to date packages so we'll just use those rather than
+    curl-install from the Opam website.
+
+    After Opam is ready we add opam-depext. Running `opam depext` checks the
+    operating system for dependencies and will install anything needed before we
+    install Mirage. After our dependencies are all ready, we can install mirage
+    & mirage-unix.
+
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      RUN apk add --update \
+          ocaml ocaml-compiler-libs ocaml-ocamldoc ocaml-findlib opam \
+          make m4 musl-dev
+      ENV OPAMYES=1
+      RUN opam init --auto-setup --disable-sandboxing
+      RUN eval $(opam env) && opam install opam-depext
+      RUN eval $(opam env) && opam depext  mirage mirage-unix
+      RUN eval $(opam env) && opam install mirage mirage-unix
+    #+END_SRC
+
+    We're targeting POSIX because Firecracker isn't a supported Mirage target
+    (yet?) If it were supported, we'd use a different implementation of Mirage
+    to target the Firecracker VM.
+
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      ADD ./ /src
+      WORKDIR /src
+      RUN eval $(opam env) && mirage configure -t unix && make depend && make
+      WORKDIR /
+    #+END_SRC
+
+    We can package up the webserver as a docker image to target Docker or
+    Kubernetes. This is handy if you are on an opperating system like macOS or
+    Windows where you are unable to use Firecracker.
+
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      FROM alpine:3.11 as docker
+      RUN apk add --update gmp
+      COPY --from=build /src/_build/main.native /bin/server
+      ENTRYPOINT /bin/server --port 8080
+      EXPOSE 8080
+    #+END_SRC
+
+    Note: See how we gave the server a port argument? That's our configurable
+    port argument that we defined in [[file:config.ml][config.ml]]. If we start our server with
+    `--help` you'll see a nice manpage with all the options available.
+
+    #+BEGIN_SRC text
+      WEBSERVER(1)                   Webserver Manual                   WEBSERVER(1)
+
+
+
+      NAME
+             webserver
+
+      SYNOPSIS
+             webserver [OPTION]...
+
+      UNIKERNEL PARAMETERS
+             --ips=IPS (absent=0.0.0.0)
+                 The IPv4 addresses bound by the socket in the unikernel.
+
+             -l LEVEL, --logs=LEVEL (absent MIRAGE_LOGS env)
+                 Be more or less verbose. LEVEL must be of the form *:info,foo:debug
+                 means that that the log threshold is set to info for every log
+                 sources but the foo which is set to debug.
+
+             --socket=SOCKET
+                 The IPv4 address bound by the socket in the unikernel.
+
+      APPLICATION OPTIONS
+             --port=VAL (absent=80)
+                 Listening HTTP port.
+
+      OPTIONS
+             --help[=FMT] (default=auto)
+                 Show this help in format FMT. The value FMT must be one of `auto',
+                 `pager', `groff' or `plain'. With `auto', the format is `pager` or
+                 `plain' whenever the TERM env var is `dumb' or undefined.
+
+      ENVIRONMENT
+             These environment variables affect the execution of webserver:
+
+             MIRAGE_LOGS
+                 See option --logs.
+
+
+
+      Webserver                                                         WEBSERVER(1)
+    #+END_SRC
+
+    To package up a Firecracker image, we need e2fsprogs to create a Linux
+    filesystem. The basic Firecracker Linux kernel image is needed from AWS
+    S3. We need a Docker host volume to drop the Firecracker image onto later at
+    runtime when building with the [[file:build_rootfs.sh][build_rootfs.sh]] explained below.
+
+    Also grab the latest released [[https://github.com/firecracker-microvm/firectl][firectl]] and [[https://github.com/firecracker-microvm/firecracker][firecracker]] binaries from the
+    interwebs.
+
+    #+BEGIN_SRC dockerfile :tangle Dockerfile
+      FROM build as firecracker
+      RUN apk add e2fsprogs
+      ADD https://s3.amazonaws.com/spec.ccfc.min/img/hello/kernel/hello-vmlinux.bin \
+          /vmlinux.bin
+      ADD https://firectl-release.s3.amazonaws.com/firectl-v0.1.0 \
+          /usr/local/bin/firectl
+      ADD https://github.com/firecracker-microvm/firecracker/releases/download/v0.20.0/firecracker-v0.20.0-x86_64 \
+          /usr/local/bin/firecracker
+      RUN chmod 755 /usr/local/bin/*
+      VOLUME /drop
+    #+END_SRC
+
+    So we have 2 Docker images defined now. One is just a normal Docker image
+    with our unikernel in it ready to run. The other is a Docker image with all
+    the tools needed to build a Firecracker image.
+
+***** Firecracker Root File-System
+
+      Now we'll explain how the Firecracker VM images are created.
+
+      This [[file:build_rootfs.sh][build_rootfs.sh]] script will run **inside** of our Firecracker Docker
+      container at runtime and create a small loopback file formatted as a Linux
+      EXT4 disk image. It then mounts the image, copies the unikernel and the
+      required libraries to it, and unmounts it. The musl & GMP libraries are
+      needed because Mirage doesn't compile unix executables statically.
+
+      I tried to statically compile Mirage unix binaries on Alpine with
+      musl. There is an [[https://github.com/mirage/mirage/issues/880][issue]] open to support this in the future. It would be
+      nice if this was a static executable for deployment but it's not a big
+      bother to include two small libraries.
+
+      At the end of the script the kernel & root filesystem is dropped off onto
+      the host drop volume.
+
+      #+BEGIN_SRC sh :tangle build_rootfs.sh :shebang "#!/usr/bin/env bash"
+        dd if=/dev/zero of=/rootfs.ext4 bs=1M count=32
+        mkfs.ext4 /rootfs.ext4
+        mount -o loop /rootfs.ext4 /mnt
+        mkdir -p /mnt/lib /mnt/usr/lib/ /mnt/sbin
+        cp /lib/ld-musl-x86_64.so.1 /mnt/lib/
+        cp /usr/lib/libgmp.so.10    /mnt/usr/lib/
+        cp /src/_build/main.native  /mnt/sbin/init
+        umount /mnt
+        chmod 644 /*.{bin,ext4}
+        cp /*.{bin,ext4} /usr/local/bin/* /drop/
+      #+END_SRC
+
+***** Build Docker Images
+
+      Now that we have all our files & scripts setup correctly, we'll build the
+      Docker image that contains the webserver on top of barebones alpine (which
+      we discussed above.) You can run the [[file:build_docker.sh][build_docker.sh]] script to do this.
+
+      #+BEGIN_SRC sh :tangle build_docker.sh :shebang "#!/usr/bin/env bash"
+        docker build --tag restack/001-webserver --target=docker $PWD
+      #+END_SRC
+
+      The [[file:build_docker.sh][build_docker.sh]] script also builds the Firecracker Docker image that
+      has all the image-creation tools (also discussed above.)
+
+      #+BEGIN_SRC sh :tangle build_docker.sh :shebang "#!/usr/bin/env bash"
+        docker build --tag restack/001-webserver-rootfs --target=firecracker $PWD
+      #+END_SRC
+
+***** Docker Test Run
+
+      The [[file:run_ducker.sh][run_docker.sh]] script uses the docker runtime image that we built to
+      launch a background container. It then makes several requests to the
+      unikernel in the docker container. At the end it stops & removes the
+      container. Super basic.
+
+      You can see that we mapped port 8080 to port 8080 on the host machine when
+      we started the webserver.
+
+      #+BEGIN_SRC sh :tangle run_docker.sh :shebang "#!/usr/bin/env bash"
+        docker run --init --name 001-webserver --publish 8080:8080 restack/001-webserver
+      #+END_SRC
+
+      Test your running webserver with curl using this [[file:test_docker.sh][test_docker.sh]] script.
+
+      #+BEGIN_SRC sh :tangle test_docker.sh :shebang "#!/usr/bin/env bash"
+        for tick in $(seq 0 3); do
+            sleep 1
+            echo "$(curl -fsSL http://localhost:8080)"
+        done
+      #+END_SRC
+
+*** Firecracker
+
+    Firecracker is an open-source microvm project from the Amazon Web Services
+    team. You can find out more about it [[https://firecracker-microvm.github.io/][here]]. To run firecracker, you'll need
+    to be on Linux. But you're going to need to be on Linux to try Xen or KVM
+    also (later.) Might as well get used to jumping on a Linux box. We can
+    always build things inside of Docker and ship them from macOS or
+    Windows. But to actually run things you're going to need Linux.
+
+***** Firecracker Root File-System
+
+      This script uses the docker image that we built to package up the rootfs
+      and drop it off on our host machine. Notice that we have to use
+      `--privileged` docker flag in order to mount the loop back file above in
+      [[file:build_rootfs.sh][build_rootfs.sh]].
+
+      #+BEGIN_SRC sh :tangle run_firecracker.sh :shebang "#!/usr/bin/env bash"
+        DROP_DIR=$(mktemp -d)
+        docker run --privileged --interactive --tty --rm --volume $DROP_DIR:/drop \
+            restack/001-webserver-rootfs /src/build_rootfs.sh
+        cp $DROP_DIR/* $PWD/
+      #+END_SRC
+
+      Congrats! You now have a Firecracker image of your unikernel ready to deploy
+      on AWS.
+
+***** Linux Host Machine Setup
+
+      Create an m5d.metal instance using Amazon Linux 2 or use your desktop
+      Linux machine. If you are using your own Linux machine you'll need
+      KVM. You'll need KVM for other experiments in the future. Best install it
+      now.
+
+      On Ubuntu/Debian (you can skip this step for Amazon Linux 2)
+
+      #+BEGIN_SRC sh
+        sudo apt-get install -y \
+            qemu-kvm libvirt-clients libvirt-daemon-system bridge-utils iptables
+      #+END_SRC
+
+      Regardless of how you installed KVM or what flavor of Linux you are using,
+      you'll likely need to give your user read/write access to KVM. Inspect
+      /dev/kvm to see what the permissions are. Change them if needed.
+
+      #+BEGIN_SRC sh
+        sudo setfacl -m u:${USER}:rw /dev/kvm
+      #+END_SRC
+
+      You'll also need virtual networking and masquerading on the host so that
+      the microVM can communicate. NOTE: Change `eth0` to your choice of network
+      interface device on the host.
+
+      #+BEGIN_SRC sh
+        sudo ip tuntap add tap0 mode tap user $(id -u) group $(id -g)
+        sudo ip addr add 172.17.100.1/24 dev tap0
+        sudo ip link set tap0 up
+        sudo sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+        sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+        sudo iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        sudo iptables -A FORWARD -i tap0 -o eth0 -j ACCEPT
+      #+END_SRC
+
+***** Firecracker Test Run
+
+      In the [[file:run_firecacker.sh][run_firecracker.sh]] script we create microVM with your MirageOS
+      webserver running inside. You can see that we tell the firectl executable
+      where the firecracker executeable is located. This wouldn't be necessary
+      if you had firecracker in your PATH. You can also see that we pass
+      specific networking configuration to the booting kernel. This allows linux
+      to configure eth0 without any scripting in the microVM.
+
+      #+BEGIN_SRC sh :tangle run_firecracker.sh :shebang "#!/usr/bin/env bash"
+        ./firectl \
+            --firecracker-binary=$PWD/firecracker \
+            --kernel=$PWD/vmlinux.bin \
+            --root-drive=$PWD/rootfs.ext4 \
+            --kernel-opts="console=ttyS0 ip=172.17.100.2::172.17.100.1:255.255.255.0:webserver:eth0:off:172.17.100.1::" \
+            --tap-device=tap0/AA:FC:00:00:00:01
+      #+END_SRC
+
+      Test your running webserver with curl using this [[file:test_firecracker.sh][test_firecracker.sh]]
+      script.
+
+      #+BEGIN_SRC sh :tangle test_firecracker.sh :shebang "#!/usr/bin/env bash"
+        for tick in $(seq 0 3); do
+            sleep 1
+            echo "$(curl -fsSL http://172.17.100.2)"
+        done
+      #+END_SRC

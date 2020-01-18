@@ -1,0 +1,6 @@
+*.bin
+*.ext4
+*.socket
+_build
+firecracker
+firectl
