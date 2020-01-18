@@ -73,7 +73,7 @@
 
   All of the mini-tutorials shown will use Docker. This may not be how we
   develop things on a day to day basis. But, for the purposes of sharing
-  information, Docker is a great choice for portabliity. It'll work on most any
+  information, Docker is a great choice for portability. It'll work on most any
   OS regardless of state. So long as you have Docker, you are good to go. (If
   you happen to be using a Debian-based OS, then you can just copy the Docker
   steps in your own desktop OS.)
@@ -81,7 +81,7 @@
 * Advertising
 
   This work is sponsored by me as an effort to hustle work. I have worked
-  contract remote for the last 12 years but I'm open to employement or
+  contract remote for the last 12 years but I'm open to employment or
   partnership in a startup effort. I am always looking for an opportunity to use
   Haskell, OCaml/ReasonML, or Rust full-time. I can help your team temporarily
   or permanently. No opportunity is too short or long. Don't be shy.
