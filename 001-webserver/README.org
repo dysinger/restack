@@ -9,10 +9,10 @@
   clock time as JSON. We're keeping the functionality simple so we can focus on
   the configuration and deployment of MirageOS still.
 
-  More explanation went into most of these files in [[file:~/src/restack/000-hello-world/README.org][Hello, World]]. Go check that
-  tutorial out for reference if needed. We'll be reusing some of those files in
-  this tutorial without changes so we'll skip the lengthy explanation in some
-  spots.
+  More explanation went into most of these files in the "Hello World". Go check
+  that tutorial out for reference if needed. We'll be reusing some of those
+  files in this tutorial without changes so we'll skip the lengthy explanation
+  in some spots.
 
 *** MirageOS
 
