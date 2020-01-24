@@ -84,7 +84,7 @@
 
 *** OCamlbuild
 
-    [[file:myocamlbuild.ml][myocamlbuild.ml]] has not changed the previous tutorial [[file:~/src/restack/000-hello-world/README.org][Hello, World]]. It is
+    [[file:myocamlbuild.ml][myocamlbuild.ml]] has not changed the previous tutorial "Hello World". It is
     still needed to compile our ReasonML.
 
     #+BEGIN_SRC ocaml :tangle myocamlbuild.ml
