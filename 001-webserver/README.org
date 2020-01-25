@@ -438,8 +438,8 @@
         cp $DROP_DIR/* $PWD/
       #+END_SRC
 
-      Congrats! You now have a Firecracker image of your unikernel ready to deploy
-      on AWS.
+      Congrats! You now have a Firecracker image of your unikernel ready to
+      deploy.
 
 ***** Linux Host Machine Setup
 
