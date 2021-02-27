@@ -104,3 +104,5 @@
 
 *** [[file:000-hello-world/README.org][A ReasonML/MirageOS "Hello, World"]]
 *** [[file:001-webserver/README.org][A ReasonML/MirageOS Webserver]]
+
+[[][https://static.scarf.sh/a.png?x-pxid=90b427f6-f7e2-4259-aaf2-0f48d2e974]]
